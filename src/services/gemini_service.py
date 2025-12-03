@@ -5,7 +5,7 @@ from src.config import settings
 genai.configure(api_key=settings.GEMINI_API_KEY)
 
 # Instanciamos el modelo (Gemini 1.5 Flash es ideal para esto por velocidad)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 async def generate_answer(question: str, context_text: str) -> str:
     """
