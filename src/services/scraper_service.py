@@ -8,7 +8,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 # --- CONSTANTES DE CONTROL REVISADAS ---
 MAX_PAGES_TO_CRAWL = 5  
 MAX_CONTEXT_LENGTH = 100000 
-TIMEOUT_SECONDS = 3.0 # Tiempo de espera máximo por cada página.
+TIMEOUT_SECONDS = 5.0 # Tiempo de espera máximo por cada página.
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; MicroserviceBot/1.0)",
@@ -64,16 +64,28 @@ def _get_internal_links(soup: BeautifulSoup, base_url: str) -> Set[str]:
 
 # --- FUNCIÓN PRINCIPAL DE RASTREO (Versión Asíncrona con Debugging) ---
 
+# src/services/scraper_service.py
+
+# --- CONSTANTES DE CONTROL REVISADAS ---
+MAX_PAGES_TO_CRAWL = 5  
+MAX_CONTEXT_LENGTH = 100000 
+TIMEOUT_SECONDS = 5.0 # <-- AUMENTAMOS ligeramente, confiando en tenacity para reintentos.
+
+# ... (otras funciones auxiliares y decorador @retry siguen iguales)
+
 @retry(
-    stop=stop_after_attempt(3), # Intentar un máximo de 3 veces
-    wait=wait_exponential(multiplier=1, min=2, max=10), # Esperar 2s, 4s, etc. entre intentos
-    retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS) # Solo reintentar si es error de red/timeout
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS)
 )
 async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, str]:
-    """Función auxiliar que descarga y retorna el HTML crudo con lógica de reintentos."""
+    """Función auxiliar que descarga y retorna el HTML crudo con manejo de redirecciones."""
     print(f"DEBUG: Intentando descargar URL: {url}")
     try:
-        response = await client.get(url, headers=HEADERS, timeout=TIMEOUT_SECONDS)
+        # Añadimos follow_redirects=True para manejar 301/302 automáticamente.
+        response = await client.get(url, headers=HEADERS, timeout=TIMEOUT_SECONDS, follow_redirects=True)
+        
+        # raise_for_status solo se llama si el código es 4xx o 5xx.
         response.raise_for_status() 
 
         # ... (Decodificación del contenido sigue igual)
@@ -86,11 +98,11 @@ async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, s
         return url, html_content
 
     except httpx.RequestError as e:
-        # Relanzamos el error si es un tipo reintentable
+        # Error de red/timeout -> Dispara el reintento de Tenacity
         print(f"ADVERTENCIA: Falló la descarga de {url} (Reintentando...). Error: {type(e).__name__}")
-        raise e # Esto dispara el reintento por el decorador @retry
+        raise e 
     except httpx.HTTPStatusError as e:
-        # No reintentamos errores 4xx/5xx (estos son definitivos)
+        # No reintentamos errores 4xx/5xx definitivos.
         print(f"ADVERTENCIA: Error HTTP {e.response.status_code} en {url}. Saltando página.")
         return url, ""
     
