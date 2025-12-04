@@ -5,7 +5,7 @@ from urllib.parse import urljoin, urlparse
 from typing import Set, Tuple, List
 
 # --- CONSTANTES DE CONTROL ---
-MAX_PAGES_TO_CRAWL = 5  # Limita el número de páginas secundarias a rastrear.
+MAX_PAGES_TO_CRAWL = 30  # Limita el número de páginas secundarias a rastrear.
 MAX_CONTEXT_LENGTH = 100000 # Limita el total de caracteres de contexto.
 TIMEOUT_SECONDS = 5.0 # Tiempo de espera por cada solicitud HTTP.
 
