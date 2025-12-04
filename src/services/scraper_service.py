@@ -7,14 +7,52 @@ from typing import Set, Tuple, List
 # --- CONSTANTES DE CONTROL REVISADAS ---
 MAX_PAGES_TO_CRAWL = 5  
 MAX_CONTEXT_LENGTH = 100000 
-TIMEOUT_SECONDS = 3.0 # REDUCIDO: 3 segundos por página para reducir latencia total.
+TIMEOUT_SECONDS = 3.0 # Tiempo de espera máximo por cada página.
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; MicroserviceBot/1.0)",
     "Accept": "text/html"
 }
 
-# Las funciones _clean_and_extract_text y _get_internal_links quedan sin cambios (por brevedad, asumimos que son las mismas)
+# --- FUNCIONES AUXILIARES FALTANTES ---
+
+def _clean_and_extract_text(html_content: str) -> str:
+    """Extrae texto limpio de un fragmento HTML, eliminando scripts, estilos, etc."""
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Eliminar elementos no deseados (scripts, estilos, navegación, pies de página, formularios)
+    for element in soup(["script", "style", "header", "footer", "nav", "form"]):
+        element.decompose()
+
+    # Obtener texto y limpiar espacios en blanco
+    text = soup.get_text(separator=" ")
+    return " ".join(text.split())
+
+def _get_internal_links(soup: BeautifulSoup, base_url: str) -> Set[str]:
+    """Extrae enlaces internos únicos de la página base."""
+    base_netloc = urlparse(base_url).netloc
+    internal_links = set()
+    
+    for link_tag in soup.find_all('a', href=True):
+        href = link_tag['href']
+        
+        # Resuelve rutas relativas a rutas absolutas
+        full_url = urljoin(base_url, href)
+        parsed_url = urlparse(full_url)
+        
+        # Filtra: Debe ser HTTP/HTTPS, debe ser del mismo dominio (base_netloc)
+        # y no debe ser un simple enlace de ancla (#section)
+        if (parsed_url.scheme in ('http', 'https') and
+            parsed_url.netloc == base_netloc and
+            parsed_url.fragment == ''):
+            
+            # Reconstruye la URL sin parámetros de query/fragmento (limpieza simple)
+            clean_url = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
+            internal_links.add(clean_url)
+            
+    return internal_links
+
+# --- FUNCIÓN PRINCIPAL DE RASTREO (Versión Asíncrona con Debugging) ---
 
 async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, str]:
     """Función auxiliar para descargar y raspar una URL individual con mejor manejo de errores."""
@@ -28,7 +66,6 @@ async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, s
         try:
             html_content = response.content.decode('utf-8')
         except UnicodeDecodeError:
-            # Opción de fallback si UTF-8 falla (ej. si es ISO-8859-1)
             print(f"ADVERTENCIA: Falló decodificación UTF-8 para {url}. Intentando ISO-8859-1.")
             html_content = response.content.decode('iso-8859-1', errors='ignore')
 
@@ -46,7 +83,8 @@ async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, s
 
 async def scrape_url_with_context(url: str) -> str:
     """
-    Rastrea la URL principal y URLs secundarias. (Función principal)
+    Rastrea la URL principal, extrae N enlaces internos y raspa su contenido
+    de forma paralela para construir un contexto masivo para Gemini.
     """
     async with httpx.AsyncClient() as client:
         # 1. Scraping de la página principal
@@ -56,6 +94,7 @@ async def scrape_url_with_context(url: str) -> str:
             raise Exception("La página principal no pudo ser accedida o no tiene contenido.")
 
         # 2. Extracción de enlaces y scraping paralelo de secundarios
+        # Usamos el texto de la página principal para obtener los enlaces
         main_soup = BeautifulSoup(main_text, "html.parser")
         potential_links = _get_internal_links(main_soup, url)
         
@@ -74,7 +113,6 @@ async def scrape_url_with_context(url: str) -> str:
         current_length = len(main_text)
         
         for link, text in results:
-            # Solo si hay texto y si cabe en el contexto total
             if text and current_length + len(text) < MAX_CONTEXT_LENGTH:
                 full_context.append(f"\n--- CONTEXTO ADICIONAL: {link} ---\n{text}")
                 current_length += len(text)
