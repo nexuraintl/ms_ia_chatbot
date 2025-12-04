@@ -32,16 +32,17 @@ def _get_internal_links(soup: BeautifulSoup, base_url: str) -> Set[str]:
     """Extrae enlaces internos únicos de la página base."""
     base_netloc = urlparse(base_url).netloc
     internal_links = set()
-    
+    raw_links_found = 0 # <-- NUEVA LÍNEA DE DEBUG
+
     for link_tag in soup.find_all('a', href=True):
         href = link_tag['href']
-        
+        raw_links_found += 1 # <-- NUEVA LÍNEA DE DEBUG
+
         # Resuelve rutas relativas a rutas absolutas
         full_url = urljoin(base_url, href)
         parsed_url = urlparse(full_url)
         
         # Filtra: Debe ser HTTP/HTTPS, debe ser del mismo dominio (base_netloc)
-        # y no debe ser un simple enlace de ancla (#section)
         if (parsed_url.scheme in ('http', 'https') and
             parsed_url.netloc == base_netloc and
             parsed_url.fragment == ''):
@@ -50,6 +51,7 @@ def _get_internal_links(soup: BeautifulSoup, base_url: str) -> Set[str]:
             clean_url = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
             internal_links.add(clean_url)
             
+    print(f"DEBUG LINKS: BeautifulSoup encontró {raw_links_found} enlaces <a>. {len(internal_links)} pasaron el filtro interno.") # <-- NUEVA LÍNEA DE DEBUG
     return internal_links
 
 # --- FUNCIÓN PRINCIPAL DE RASTREO (Versión Asíncrona con Debugging) ---
