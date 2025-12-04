@@ -3,6 +3,7 @@ import asyncio
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from typing import Set, Tuple, List
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # --- CONSTANTES DE CONTROL REVISADAS ---
 MAX_PAGES_TO_CRAWL = 5  
@@ -13,6 +14,13 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; MicroserviceBot/1.0)",
     "Accept": "text/html"
 }
+
+# Definimos los errores de httpx que queremos reintentar
+RETRYABLE_EXCEPTIONS = (
+    httpx.ConnectError,
+    httpx.ReadTimeout,
+    httpx.ConnectTimeout,
+)
 
 # --- FUNCIONES AUXILIARES FALTANTES ---
 
@@ -56,27 +64,33 @@ def _get_internal_links(soup: BeautifulSoup, base_url: str) -> Set[str]:
 
 # --- FUNCIÓN PRINCIPAL DE RASTREO (Versión Asíncrona con Debugging) ---
 
+@retry(
+    stop=stop_after_attempt(3), # Intentar un máximo de 3 veces
+    wait=wait_exponential(multiplier=1, min=2, max=10), # Esperar 2s, 4s, etc. entre intentos
+    retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS) # Solo reintentar si es error de red/timeout
+)
 async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, str]:
-    """Función auxiliar que descarga y retorna el HTML crudo."""
+    """Función auxiliar que descarga y retorna el HTML crudo con lógica de reintentos."""
     print(f"DEBUG: Intentando descargar URL: {url}")
     try:
         response = await client.get(url, headers=HEADERS, timeout=TIMEOUT_SECONDS)
         response.raise_for_status() 
 
-        # Decodificar el contenido binario a texto
+        # ... (Decodificación del contenido sigue igual)
         try:
             html_content = response.content.decode('utf-8')
         except UnicodeDecodeError:
             print(f"ADVERTENCIA: Falló decodificación UTF-8 para {url}. Intentando ISO-8859-1.")
             html_content = response.content.decode('iso-8859-1', errors='ignore')
 
-        # *** CAMBIO: DEVOLVEMOS EL HTML CRUDO ***
         return url, html_content
 
     except httpx.RequestError as e:
-        print(f"ADVERTENCIA: Falló la descarga de {url} (Timeout o Red). Error: {e}")
-        return url, ""
+        # Relanzamos el error si es un tipo reintentable
+        print(f"ADVERTENCIA: Falló la descarga de {url} (Reintentando...). Error: {type(e).__name__}")
+        raise e # Esto dispara el reintento por el decorador @retry
     except httpx.HTTPStatusError as e:
+        # No reintentamos errores 4xx/5xx (estos son definitivos)
         print(f"ADVERTENCIA: Error HTTP {e.response.status_code} en {url}. Saltando página.")
         return url, ""
     
