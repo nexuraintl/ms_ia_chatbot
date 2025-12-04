@@ -57,24 +57,21 @@ def _get_internal_links(soup: BeautifulSoup, base_url: str) -> Set[str]:
 # --- FUNCIÓN PRINCIPAL DE RASTREO (Versión Asíncrona con Debugging) ---
 
 async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, str]:
-    """Función auxiliar para descargar y raspar una URL individual con mejor manejo de errores."""
+    """Función auxiliar que descarga y retorna el HTML crudo."""
     print(f"DEBUG: Intentando descargar URL: {url}")
     try:
-        # Usamos response.content y forzamos decodificación a UTF-8 (más robusto)
         response = await client.get(url, headers=HEADERS, timeout=TIMEOUT_SECONDS)
         response.raise_for_status() 
 
-        # Decodificar el contenido binario a texto (forzando UTF-8 si es necesario)
+        # Decodificar el contenido binario a texto
         try:
             html_content = response.content.decode('utf-8')
         except UnicodeDecodeError:
             print(f"ADVERTENCIA: Falló decodificación UTF-8 para {url}. Intentando ISO-8859-1.")
             html_content = response.content.decode('iso-8859-1', errors='ignore')
 
-        clean_text = _clean_and_extract_text(html_content)
-        
-        print(f"DEBUG: Descarga exitosa. Longitud de texto extraído: {len(clean_text)} caracteres.")
-        return url, clean_text
+        # *** CAMBIO: DEVOLVEMOS EL HTML CRUDO ***
+        return url, html_content
 
     except httpx.RequestError as e:
         print(f"ADVERTENCIA: Falló la descarga de {url} (Timeout o Red). Error: {e}")
@@ -82,24 +79,28 @@ async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, s
     except httpx.HTTPStatusError as e:
         print(f"ADVERTENCIA: Error HTTP {e.response.status_code} en {url}. Saltando página.")
         return url, ""
-
+    
 async def scrape_url_with_context(url: str) -> str:
     """
-    Rastrea la URL principal, extrae N enlaces internos y raspa su contenido
-    de forma paralela para construir un contexto masivo para Gemini.
+    Rastrea la URL principal, extrae N enlaces internos y raspa su contenido.
     """
     async with httpx.AsyncClient() as client:
-        # 1. Scraping de la página principal
-        main_url, main_text = await _fetch_and_scrape(client, url)
+        # 1. Scraping de la página principal (obtenemos HTML crudo)
+        main_url, raw_html = await _fetch_and_scrape(client, url) # <-- Ahora es raw_html
         
-        if not main_text:
+        if not raw_html:
             raise Exception("La página principal no pudo ser accedida o no tiene contenido.")
 
-        # 2. Extracción de enlaces y scraping paralelo de secundarios
-        # Usamos el texto de la página principal para obtener los enlaces
-        main_soup = BeautifulSoup(main_text, "html.parser")
+        # --- ORDEN CORRECTO DE PROCESAMIENTO ---
+        
+        # 2. Extracción de enlaces (DEBE USAR EL HTML CRUDO)
+        main_soup = BeautifulSoup(raw_html, "html.parser") # <-- Creamos el soup del HTML crudo
         potential_links = _get_internal_links(main_soup, url)
         
+        # 3. Limpieza para obtener el contexto de la página principal
+        main_text = _clean_and_extract_text(raw_html) # <-- Limpiamos el texto principal
+        
+        # 4. Filtrado y preparación para el rastreo paralelo
         secondary_links: List[str] = [
             link for link in potential_links 
             if link != main_url.rstrip('/')
@@ -110,18 +111,24 @@ async def scrape_url_with_context(url: str) -> str:
         tasks = [_fetch_and_scrape(client, link) for link in secondary_links]
         results: List[Tuple[str, str]] = await asyncio.gather(*tasks)
 
-        # 3. Concatenación y límite de contexto
+        # 5. Concatenación y límite de contexto
+        # ... (El resto de la función de concatenación sigue igual, solo que ahora los resultados de results son HTML crudo)
+        
         full_context = [f"--- CONTEXTO PRINCIPAL: {main_url} ---\n{main_text}"]
         current_length = len(main_text)
-        
-        for link, text in results:
-            if text and current_length + len(text) < MAX_CONTEXT_LENGTH:
-                full_context.append(f"\n--- CONTEXTO ADICIONAL: {link} ---\n{text}")
-                current_length += len(text)
-            elif text:
-                print(f"DEBUG: Contexto omitido de {link} - Límite de {MAX_CONTEXT_LENGTH} caracteres alcanzado.")
-                break 
-        
+
+        for link, raw_content in results: # <-- raw_content es el HTML crudo
+            if raw_content:
+                # Limpiamos el texto de las páginas secundarias justo antes de añadirlo
+                secondary_text = _clean_and_extract_text(raw_content) 
+                
+                if current_length + len(secondary_text) < MAX_CONTEXT_LENGTH:
+                    full_context.append(f"\n--- CONTEXTO ADICIONAL: {link} ---\n{secondary_text}")
+                    current_length += len(secondary_text)
+                else:
+                    print(f"DEBUG: Contexto omitido de {link} - Límite de {MAX_CONTEXT_LENGTH} caracteres alcanzado.")
+                    break 
+
         final_context = "".join(full_context)
         print(f"DEBUG FINAL: Longitud total del contexto enviado a Gemini: {len(final_context)} caracteres.")
         
