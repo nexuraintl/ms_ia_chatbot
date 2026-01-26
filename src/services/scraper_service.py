@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from typing import Set, Tuple, List
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from pydantin import HttpUrl
 
 # --- CONSTANTES DE CONTROL REVISADAS ---
 MAX_PAGES_TO_CRAWL = 5  
@@ -159,3 +160,26 @@ async def scrape_url_with_context(url: str) -> str:
         print(f"DEBUG FINAL: Longitud total del contexto enviado a Gemini: {len(final_context)} caracteres.")
         
         return final_context
+
+async def scrape_specific_urls(urls: List[HttpUrl]) -> str:
+    """
+    Descarga y limpia el contenido de una lista específica de URLs en paralelo.
+    """
+    async with httpx.AsyncClient() as client:
+        # Creamos las tareas de descarga para cada URL recibida
+        tasks = [_fetch_and_scrape(client, str(u)) for u in urls]
+        results = await asyncio.gather(*tasks)
+
+        full_context = []
+        current_length = 0
+
+        for url, raw_html in results:
+            if raw_html:
+                text = _clean_and_extract_text(raw_html)
+                if current_length + len(text) < MAX_CONTEXT_LENGTH:
+                    full_context.append(f"\n--- CONTENIDO DE: {url} ---\n{text}")
+                    current_length += len(text)
+                else:
+                    break
+
+        return "".join(full_context)

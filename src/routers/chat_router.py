@@ -11,21 +11,20 @@ router = APIRouter()
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(payload: ChatRequest):
     try:
-        # 1. Obtener contexto de la URL (Ahora rastrea múltiples páginas)
-        context_text = await scrape_url_with_context(str(payload.url)) 
-        
-        if not context_text:
-            # Este error ahora es más específico si el rastreo inicial falla
-            raise HTTPException(status_code=400, detail="No se pudo obtener contexto de la URL o sus páginas relacionadas.")
+        # Verificamos si es una lista o un solo string
+        if isinstance(payload.url, list):
+            print(f"DEBUG: Modo Selección Directa detectado ({len(payload.url)} URLs)")
+            # Nueva función para procesar la lista exacta
+            context_text = await scrape_specific_urls(payload.url)
+        else:
+            print(f"DEBUG: Modo Explorador detectado (URL única)")
+            # Tu función actual que busca el mapa del sitio
+            context_text = await scrape_url_with_context(str(payload.url), payload.question)
 
-        # 2. Consultar a Gemini (La función recibe el texto masivo)
+        # Generar respuesta con Gemini (tu función actual)
         answer = await generate_answer(payload.question, context_text)
 
-        return ChatResponse(
-            answer=answer,
-            source_url=str(payload.url)
-        )
+        return ChatResponse(answer=answer, source_url=str(payload.url))
 
     except Exception as e:
-        # Manejo de errores generales
         raise HTTPException(status_code=500, detail=str(e))
