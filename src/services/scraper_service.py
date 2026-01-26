@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from typing import Set, Tuple, List
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from pydantin import HttpUrl
+from pydantic import HttpUrl
 
 # --- CONSTANTES DE CONTROL REVISADAS ---
 MAX_PAGES_TO_CRAWL = 5  
