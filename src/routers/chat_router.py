@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 from src.models.schemas import ChatRequest, ChatResponse
 # --- CAMBIO AQUÍ: Importamos la nueva función ---
-from src.services.scraper_service import scrape_url_with_context 
+from src.services.scraper_service import scrape_url_with_context, scrape_specific_urls 
 from src.services.gemini_service import generate_answer
 
 router = APIRouter()
