@@ -107,57 +107,61 @@ async def _fetch_and_scrape(client: httpx.AsyncClient, url: str) -> Tuple[str, s
         print(f"ADVERTENCIA: Error HTTP {e.response.status_code} en {url}. Saltando página.")
         return url, ""
     
-async def scrape_url_with_context(url: str) -> str:
+# src/services/scraper_service.py
+
+# Importamos la función de filtrado (asegúrate de tenerla en gemini_service.py)
+from src.services.gemini_service import filter_relevant_links 
+
+async def scrape_url_with_context(url: str, question: str) -> str:
     """
-    Rastrea la URL principal, extrae N enlaces internos y raspa su contenido.
+    Rastrea la URL principal y utiliza IA para elegir qué enlaces 
+    secundarios son relevantes para la pregunta antes de rasparlos.
     """
     async with httpx.AsyncClient() as client:
-        # 1. Scraping de la página principal (obtenemos HTML crudo)
-        main_url, raw_html = await _fetch_and_scrape(client, url) # <-- Ahora es raw_html
+        # 1. Scraping de la página principal (HTML crudo)
+        main_url, raw_html = await _fetch_and_scrape(client, url)
         
         if not raw_html:
             raise Exception("La página principal no pudo ser accedida o no tiene contenido.")
 
-        # --- ORDEN CORRECTO DE PROCESAMIENTO ---
-        
-        # 2. Extracción de enlaces (DEBE USAR EL HTML CRUDO)
-        main_soup = BeautifulSoup(raw_html, "html.parser") # <-- Creamos el soup del HTML crudo
+        # 2. Extracción de enlaces (Obtenemos Tuplas de: título, url)
+        main_soup = BeautifulSoup(raw_html, "html.parser")
+        # Nota: Asegúrate que tu función _get_internal_links devuelva List[Tuple[str, str]]
         potential_links = _get_internal_links(main_soup, url)
         
-        # 3. Limpieza para obtener el contexto de la página principal
-        main_text = _clean_and_extract_text(raw_html) # <-- Limpiamos el texto principal
-        
-        # 4. Filtrado y preparación para el rastreo paralelo
-        secondary_links: List[str] = [
-            link for link in potential_links 
-            if link != main_url.rstrip('/')
-        ][:MAX_PAGES_TO_CRAWL]
-        
-        print(f"DEBUG: Enlaces secundarios a rastrear: {len(secondary_links)}")
+        # 3. Limpieza del texto de la página principal
+        main_text = _clean_and_extract_text(raw_html)
 
+        # 4. 🔥 FILTRADO INTELIGENTE (Aquí usamos la 'question')
+        print(f"DEBUG: Enviando {len(potential_links)} enlaces a Gemini para filtrar por relevancia...")
+        
+        # Llamamos a Gemini para que nos diga cuáles de esos 116 enlaces sirven para la pregunta
+        relevant_urls = await filter_relevant_links(question, potential_links, MAX_PAGES_TO_CRAWL)
+        
+        # Filtramos para no repetir la URL principal si aparecía en los links
+        secondary_links = [l for l in relevant_urls if l != main_url.rstrip('/')]
+
+        print(f"DEBUG: Enlaces seleccionados por IA: {secondary_links}")
+
+        # 5. Scraping Paralelo de las URLs seleccionadas
         tasks = [_fetch_and_scrape(client, link) for link in secondary_links]
-        results: List[Tuple[str, str]] = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
 
-        # 5. Concatenación y límite de contexto
-        # ... (El resto de la función de concatenación sigue igual, solo que ahora los resultados de results son HTML crudo)
-        
+        # 6. Concatenación de resultados
         full_context = [f"--- CONTEXTO PRINCIPAL: {main_url} ---\n{main_text}"]
         current_length = len(main_text)
 
-        for link, raw_content in results: # <-- raw_content es el HTML crudo
+        for link, raw_content in results:
             if raw_content:
-                # Limpiamos el texto de las páginas secundarias justo antes de añadirlo
                 secondary_text = _clean_and_extract_text(raw_content) 
-                
                 if current_length + len(secondary_text) < MAX_CONTEXT_LENGTH:
-                    full_context.append(f"\n--- CONTEXTO ADICIONAL: {link} ---\n{secondary_text}")
+                    full_context.append(f"\n--- CONTEXTO ADICIONAL RELEVANTE: {link} ---\n{secondary_text}")
                     current_length += len(secondary_text)
                 else:
-                    print(f"DEBUG: Contexto omitido de {link} - Límite de {MAX_CONTEXT_LENGTH} caracteres alcanzado.")
                     break 
 
         final_context = "".join(full_context)
-        print(f"DEBUG FINAL: Longitud total del contexto enviado a Gemini: {len(final_context)} caracteres.")
+        print(f"DEBUG FINAL: Contexto total optimizado: {len(final_context)} caracteres.")
         
         return final_context
 
