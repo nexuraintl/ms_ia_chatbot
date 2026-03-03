@@ -6,24 +6,49 @@ from typing import List, Tuple
 genai.configure(api_key=settings.GEMINI_API_KEY)
 
 # Instanciamos el modelo
-model = genai.GenerativeModel('gemini-2.0-flash') # Puedes usar 1.5-flash o 2.0-flash
+model = genai.GenerativeModel('gemini-2.0-flash')
 
-async def generate_answer(question: str, context_text: str) -> str:
+async def is_context_sufficient(question: str, context_text: str) -> bool:
     """
-    Genera una respuesta experta basada ÚNICAMENTE en el contexto, 
-    sin mostrar URLs ni mencionar las fuentes.
+    NUEVA: Determina si el contexto web es suficiente para responder.
+    Esto evita consultas innecesarias a la BD si la web ya tiene la respuesta.
     """
+    if not context_text or len(context_text) < 100:
+        return False
+
     prompt = f"""
-    Actúa como un asistente experto y servicial. Tu objetivo es responder la pregunta del usuario basándote exclusivamente en el contexto proporcionado.
+    Analiza si el siguiente CONTEXTO contiene información suficiente para responder a la PREGUNTA.
+    Responde ÚNICAMENTE con la palabra 'SI' o 'NO'.
+
+    PREGUNTA: {question}
+    CONTEXTO: {context_text[:2000]} # Solo enviamos una muestra para ahorrar tokens
+    """
+    try:
+        response = model.generate_content(prompt)
+        return "SI" in response.text.upper()
+    except:
+        return False
+
+async def generate_answer(question: str, context_text: str, internal_db_context: str = "") -> str:
+    """
+    Genera una respuesta basada en contexto Web e Interno.
+    """
+    # Combinamos contextos si existe información de la BD
+    full_context = context_text
+    if internal_db_context:
+        full_context += f"\n\nINFORMACIÓN ADICIONAL DE BASE DE DATOS INTERNA:\n{internal_db_context}"
+
+    prompt = f"""
+    Actúa como un asistente experto. Responde basándote exclusivamente en el contexto.
 
     REGLAS CRÍTICAS:
-    1. ÚNICAMENTE usa la información del CONTEXTO para responder.
-    2. PROHIBICIÓN TOTAL DE URLs: No incluyas enlaces ni direcciones web.
-    3. NO MENCIONES LA FUENTE: Responde de forma directa, sin frases como "según el texto".
-    4. Si la información no está en el contexto, indica amigablemente que no tienes esa información específica.
+    1. Prioriza la información más reciente o relevante entre el contexto web y la base de datos.
+    2. PROHIBICIÓN TOTAL DE URLs.
+    3. NO MENCIONES LAS FUENTES (ej. no digas "según la base de datos").
+    4. Si después de usar ambos contextos no tienes la información, admítelo amigablemente.
 
-    CONTEXTO:
-    {context_text}
+    CONTEXTO TOTAL:
+    {full_context}
 
     PREGUNTA:
     {question}

@@ -1,10 +1,11 @@
 # Servidor Web y API
 fastapi==0.109.0
 uvicorn==0.27.0
+gunicorn==21.2.0
 pydantic==2.6.0
 
 # Cliente IA (Google Gemini)
-google-generativeai==0.3.2
+google-generativeai==0.4.1
 
 # Scraping y Cliente HTTP
 httpx==0.26.0
@@ -13,3 +14,8 @@ beautifulsoup4==4.12.3
 # Robustez y Utilidades
 tenacity==8.2.3
 python-dotenv==1.0.1
+
+# Base de Datos (VPC)
+sqlalchemy>=2.0.0
+aiomysql==0.2.0
+cryptography==42.0.0
