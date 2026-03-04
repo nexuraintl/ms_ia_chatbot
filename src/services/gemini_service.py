@@ -2,52 +2,62 @@ import google.generativeai as genai
 from src.config import settings
 from typing import List, Tuple
 
-# Configuración única
 genai.configure(api_key=settings.GEMINI_API_KEY)
-
-# Instanciamos el modelo
 model = genai.GenerativeModel('gemini-2.0-flash')
 
 async def is_context_sufficient(question: str, context_text: str) -> bool:
     """
-    NUEVA: Determina si el contexto web es suficiente para responder.
-    Esto evita consultas innecesarias a la BD si la web ya tiene la respuesta.
+    Determina si el contexto web es suficiente.
     """
-    if not context_text or len(context_text) < 100:
+    # Si no hay texto web, devolvemos False de inmediato para ir a la BD
+    if not context_text or len(context_text.strip()) < 100:
         return False
 
     prompt = f"""
-    Analiza si el siguiente CONTEXTO contiene información suficiente para responder a la PREGUNTA.
-    Responde ÚNICAMENTE con la palabra 'SI' o 'NO'.
+    ¿El siguiente CONTEXTO tiene información suficiente para responder a la PREGUNTA?
+    Responde estrictamente SI o NO.
 
     PREGUNTA: {question}
-    CONTEXTO: {context_text[:2000]} # Solo enviamos una muestra para ahorrar tokens
+    CONTEXTO: {context_text[:2000]}
     """
     try:
         response = model.generate_content(prompt)
         return "SI" in response.text.upper()
     except:
-        return False
+        return False # Ante error de API, intentamos por si acaso con BD
 
 async def generate_answer(question: str, context_text: str, internal_db_context: str = "") -> str:
     """
-    Genera una respuesta basada en contexto Web e Interno.
+    Genera respuesta integrando fuentes web e internas.
     """
-    # Combinamos contextos si existe información de la BD
-    full_context = context_text
-    if internal_db_context:
-        full_context += f"\n\nINFORMACIÓN ADICIONAL DE BASE DE DATOS INTERNA:\n{internal_db_context}"
+    
+    # Construcción dinámica del bloque de contexto para la IA
+    context_blocks = []
+    if context_text and len(context_text.strip()) > 10:
+        context_blocks.append(f"--- INFORMACIÓN WEB ---\n{context_text}")
+    
+    if internal_db_context and len(internal_db_context.strip()) > 10:
+        context_blocks.append(f"--- INFORMACIÓN INTERNA (BASE DE DATOS) ---\n{internal_db_context}")
+
+    # Si no hay absolutamente nada de información
+    if not context_blocks:
+        return "Lo siento, no encontré información relevante en nuestras fuentes para responder a tu pregunta."
+
+    full_context = "\n\n".join(context_blocks)
 
     prompt = f"""
-    Actúa como un asistente experto. Responde basándote exclusivamente en el contexto.
+    Eres un asistente experto de atención al ciudadano. 
+    Responde la PREGUNTA usando exclusivamente el CONTEXTO proporcionado.
 
-    REGLAS CRÍTICAS:
-    1. Prioriza la información más reciente o relevante entre el contexto web y la base de datos.
-    2. PROHIBICIÓN TOTAL DE URLs.
-    3. NO MENCIONES LAS FUENTES (ej. no digas "según la base de datos").
-    4. Si después de usar ambos contextos no tienes la información, admítelo amigablemente.
+    REGLAS DE RESPUESTA:
+    1. Si hay "Información Institucional Interna", dales prioridad para trámites específicos.
+    2. Responde de forma cordial y profesional.
+    3. PROHIBICIÓN: No incluyas URLs, enlaces ni correos electrónicos.
+    4. PROHIBICIÓN: No digas "según la base de datos" o "en el sitio web".
+    5. Si la información no es suficiente en ninguno de los contextos, responde: 
+       "Lo siento, no tengo información suficiente para responder a esa pregunta específica. Por favor, intenta con otros términos."
 
-    CONTEXTO TOTAL:
+    CONTEXTO:
     {full_context}
 
     PREGUNTA:
@@ -58,7 +68,7 @@ async def generate_answer(question: str, context_text: str, internal_db_context:
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Error al generar respuesta: {str(e)}"
+        return f"Lo siento, ocurrió un error al procesar la respuesta. (Error: {str(e)})"
 
 async def filter_relevant_links(question: str, links: List[Tuple[str, str]], max_links: int = 5) -> List[str]:
     """
