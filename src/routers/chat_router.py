@@ -14,14 +14,17 @@ async def chat_endpoint(payload: ChatRequest):
         # 1. INTENTO INICIAL: Scraping Web
         if isinstance(payload.url, list):
             context_text = await scrape_specific_urls(payload.url)
+            current_sources = [str(u) for u in payload.url]
         else:
             context_text = await scrape_url_with_context(str(payload.url), payload.question)
+            current_sources = [str(payload.url)]
 
         # 2. VALIDACIÓN: ¿La web devolvió algo útil?
         # Usamos is_context_sufficient para que la IA decida si con lo que leyó puede responder
         suficiente = await is_context_sufficient(payload.question, context_text)
 
         internal_db_context = ""
+        final_source = ", ".join(current_sources)
         
         # 3. FALLBACK: Si no es suficiente, consultamos la base de datos interna
         if not suficiente:
@@ -34,8 +37,12 @@ async def chat_endpoint(payload: ChatRequest):
                     f"Título interno: {p['nombre']}\nContenido interno: {p['texto']}" 
                     for p in publicaciones
                 ])
+
+                final_source = "Base de Datos Institucional"
             else:
                 print("DEBUG: No se encontraron coincidencias en la base de datos.")
+                if not context_text:
+                    final_source = "No se encontró información relevante"
 
         # 4. GENERACIÓN FINAL: Gemini recibe contexto web + contexto BD (si existe)
         answer = await generate_answer(
@@ -44,7 +51,10 @@ async def chat_endpoint(payload: ChatRequest):
             internal_db_context=internal_db_context
         )
 
-        return ChatResponse(answer=answer, source_url=str(payload.url))
+        return ChatResponse(
+            answer=answer, 
+            source_url=final_source
+            )
 
     except Exception as e:
         # Log del error para Cloud Logging antes de lanzar la excepción
